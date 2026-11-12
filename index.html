@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiros Rápidos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Chakra+Petch:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: palco 16:9 centralizado; HUD nos cantos sobre o canvas; painel de menu ancorado à esquerda. Tema único (galpão ao entardecer). */
+:root{
+  color-scheme: dark;
+  --fundo:#10151b;
+  --painel:rgba(14,19,25,.86);
+  --linha:#2c3947;
+  --texto:#e6ebf0;
+  --suave:#93a1b0;
+  --acento:#ff9d2e;
+  --perigo:#e5484d;
+  --display:"Chakra Petch","Arial Narrow",Arial,sans-serif;
+  --corpo:"Barlow","Segoe UI",Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--fundo);color:var(--texto);font-family:var(--corpo);display:flex;align-items:center;justify-content:center;overflow:hidden}
+#palco{position:relative;width:min(100vw,calc(100vh * 16 / 9));aspect-ratio:16/9;max-height:100%;background:#000;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%;image-rendering:pixelated;cursor:crosshair}
+.hud{position:absolute;pointer-events:none;font-family:var(--display);font-variant-numeric:tabular-nums;text-shadow:0 1px 3px rgba(0,0,0,.8);display:flex;gap:18px;align-items:flex-end}
+.hud .rot{font-size:clamp(9px,1.3vw,13px);letter-spacing:.14em;color:var(--suave);font-weight:500}
+.hud .val{font-size:clamp(20px,4.2vw,44px);font-weight:700;line-height:1}
+#hudVida{left:2.5%;bottom:3.5%}
+#hudMun{right:2.5%;bottom:3.5%;text-align:right}
+#hudTopo{right:2.5%;top:3.5%;text-align:right}
+#hudTopo .val{font-size:clamp(14px,2.4vw,24px)}
+#vida.baixa{color:var(--perigo)}
+#mun.rec{color:var(--acento);font-size:clamp(13px,2.2vw,22px);letter-spacing:.08em}
+#menu{position:absolute;inset:0;display:flex;align-items:center;padding:0 6%;background:linear-gradient(90deg,rgba(8,11,15,.92) 0%,rgba(8,11,15,.7) 45%,rgba(8,11,15,.15) 100%)}
+#menu[hidden]{display:none}
+#cartao{max-width:min(440px,100%);display:flex;flex-direction:column;gap:clamp(8px,1.8vw,18px);align-items:flex-start}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(28px,6.4vw,68px);line-height:.95;margin:0;letter-spacing:.01em;text-wrap:balance}
+h1 span{color:var(--acento)}
+#sub{margin:0;color:var(--texto);font-size:clamp(12px,1.7vw,17px);font-weight:600}
+#teclas{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:clamp(11px,1.5vw,15px);color:var(--suave)}
+#teclas b{font-family:var(--display);font-weight:500;color:var(--texto)}
+#jogar{font-family:var(--display);font-weight:700;font-size:clamp(14px,2vw,20px);letter-spacing:.1em;color:#1a1206;background:var(--acento);border:0;padding:.7em 1.8em;cursor:pointer;clip-path:polygon(0 0,100% 0,100% 65%,92% 100%,0 100%)}
+#jogar:hover{filter:brightness(1.12)}
+#jogar:focus-visible{outline:2px solid var(--texto);outline-offset:3px}
+#recorde{margin:0;font-size:clamp(10px,1.3vw,13px);color:var(--suave);letter-spacing:.06em}
+</style>
+</head>
+<body>
+<div id="palco">
+  <canvas id="c" width="640" height="360"></canvas>
+
+  <div class="hud" id="hudVida"><div><div class="rot">VIDA</div><div class="val" id="vida">100</div></div></div>
+  <div class="hud" id="hudMun"><div><div class="rot">MUNIÇÃO</div><div class="val" id="mun">30</div></div></div>
+  <div class="hud" id="hudTopo">
+    <div><div class="rot">RODADA</div><div class="val" id="rod">1</div></div>
+    <div><div class="rot">ABATES</div><div class="val" id="aba">0</div></div>
+  </div>
+
+  <div id="menu">
+    <div id="cartao">
+      <h1 id="titulo">TIROS <span>RÁPIDOS</span></h1>
+      <p id="sub">Elimine todos os bots da rodada. A cada rodada chegam mais.</p>
+      <div id="teclas">
+        <b>W A S D</b><span>mover</span>
+        <b>Mouse ou ← →</b><span>mirar</span>
+        <b>Clique ou Espaço</b><span>atirar</span>
+        <b>R</b><span>recarregar</span>
+        <b>M</b><span>ligar ou desligar o som</span>
+        <b>Esc</b><span>pausar</span>
+      </div>
+      <button id="jogar" type="button">JOGAR</button>
+      <p id="recorde"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const W = 640, H = 360, COL = 2, NR = W / COL, FOV = 0.66, SCALE = W / (2 * FOV);
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const elVida = $('vida'), elMun = $('mun'), elRod = $('rod'), elAba = $('aba');
+const menu = $('menu'), btn = $('jogar'), elTitulo = $('titulo'), elSub = $('sub'), elRec = $('recorde');
+
+// 0 = livre, 1 = parede, 2 = caixote
+const MAP = [
+  '1111111111111111',
+  '1000000010000001',
+  '1000000010000001',
+  '1002200000002201',
+  '1002200000002201',
+  '1000000110000001',
+  '1000000110000001',
+  '1110000000000111',
+  '1000000000000001',
+  '1000000110000001',
+  '1002200110002201',
+  '1002200000002201',
+  '1000000000000001',
+  '1000000010000001',
+  '1000000010000001',
+  '1111111111111111'
+].map(r => r.split('').map(Number));
+const MS = 16;
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const cell = (x, y) => (x < 0 || y < 0 || x >= MS || y >= MS) ? 1 : MAP[y | 0][x | 0];
+const free = (x, y, r) => !cell(x - r, y - r) && !cell(x + r, y - r) && !cell(x - r, y + r) && !cell(x + r, y + r);
+function tryMove(o, dx, dy, r) {
+  if (free(o.x + dx, o.y, r)) o.x += dx;
+  if (free(o.x, o.y + dy, r)) o.y += dy;
+}
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+let state = 'menu';          // menu | play | paused | dead
+let locked = false, muted = false;
+const P = { x: 1.5, y: 1.5, a: 0.78, hp: 100, ammo: 30, reload: 0, cool: 0, flash: 0, hurt: 0, kick: 0, walk: 0 };
+let enemies = [], round = 1, kills = 0, banner = 0, bannerText = '';
+const keys = {};
+let firing = false;
+const zbuf = new Float32Array(NR);
+const flow = new Int16Array(MS * MS);
+let flowT = 0;
+
+// ---------- recorde (só neste navegador) ----------
+let best = 0;
+try { best = parseInt(localStorage.getItem('tirosRapidosRecorde') || '0', 10) || 0; } catch (e) {}
+function showBest() { elRec.textContent = best > 0 ? 'RECORDE NESTE NAVEGADOR: ' + best + ' ABATES' : ''; }
+showBest();
+
+// ---------- som ----------
+let ac = null, noise = null;
+function initAudio() {
+  try {
+    if (!ac) {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      const n = (ac.sampleRate * 0.14) | 0;
+      noise = ac.createBuffer(1, n, ac.sampleRate);
+      const d = noise.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+    }
+    if (ac.state === 'suspended') ac.resume();
+  } catch (e) { ac = null; }
+}
+function sfx(vol, rate) {
+  if (!ac || muted) return;
+  try {
+    const s = ac.createBufferSource(), gn = ac.createGain();
+    s.buffer = noise; s.playbackRate.value = rate; gn.gain.value = vol;
+    s.connect(gn); gn.connect(ac.destination); s.start();
+  } catch (e) {}
+}
+
+// ---------- raio (DDA) ----------
+let hD = 0, hS = 0, hT = 0, hU = 0;
+function cast(rx, ry) {
+  let mx = P.x | 0, my = P.y | 0;
+  const ddx = Math.abs(1 / rx), ddy = Math.abs(1 / ry);
+  let sx, sy, sdx, sdy;
+  if (rx < 0) { sx = -1; sdx = (P.x - mx) * ddx; } else { sx = 1; sdx = (mx + 1 - P.x) * ddx; }
+  if (ry < 0) { sy = -1; sdy = (P.y - my) * ddy; } else { sy = 1; sdy = (my + 1 - P.y) * ddy; }
+  let side = 0, t = 0;
+  for (let n = 0; n < 64; n++) {
+    if (sdx < sdy) { sdx += ddx; mx += sx; side = 0; } else { sdy += ddy; my += sy; side = 1; }
+    t = cell(mx, my);
+    if (t) break;
+  }
+  hD = Math.max(0.05, side ? sdy - ddy : sdx - ddx);
+  hS = side; hT = t;
+  const wx = side ? P.x + hD * rx : P.y + hD * ry;
+  hU = wx - Math.floor(wx);
+}
+
+function los(x0, y0, x1, y1) {
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 0.1);
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    if (cell(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
+  }
+  return true;
+}
+
+// campo de distâncias até o jogador: os bots seguem a célula vizinha mais próxima
+function buildFlow() {
+  flow.fill(-1);
+  const q = [(P.y | 0) * MS + (P.x | 0)];
+  flow[q[0]] = 0;
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i], cx = c % MS, cy = (c / MS) | 0;
+    for (const [dx, dy] of DIRS) {
+      const nx = cx + dx, ny = cy + dy;
+      if (!cell(nx, ny)) {
+        const k = ny * MS + nx;
+        if (flow[k] < 0) { flow[k] = flow[c] + 1; q.push(k); }
+      }
+    }
+  }
+}
+
+function spawnRound() {
+  enemies = [];
+  const n = 3 + round * 2;
+  let tries = 0;
+  while (enemies.length < n && tries++ < 3000) {
+    const x = (1 + Math.random() * (MS - 2)) | 0, y = (1 + Math.random() * (MS - 2)) | 0;
+    if (cell(x, y)) continue;
+    if (Math.hypot(x + 0.5 - P.x, y + 0.5 - P.y) < 6) continue;
+    enemies.push({ x: x + 0.5, y: y + 0.5, hp: 100, cool: 1 + Math.random() * 1.5, hit: 0, fire: 0, strafe: Math.random() < 0.5 ? 1 : -1, st: 0, depth: 0 });
+  }
+  bannerText = 'RODADA ' + round; banner = 2.2;
+}
+
+function newGame() {
+  P.x = 1.5; P.y = 1.5; P.a = 0.78; P.hp = 100; P.ammo = 30;
+  P.reload = P.cool = P.flash = P.hurt = P.kick = 0;
+  round = 1; kills = 0; firing = false;
+  spawnRound(); buildFlow();
+}
+
+function shoot() {
+  P.ammo--; P.cool = 0.105; P.flash = 0.05; P.kick = 1;
+  sfx(0.5, 1.5);
+  const dX = Math.cos(P.a), dY = Math.sin(P.a);
+  cast(dX, dY);
+  const wall = hD;
+  let tgt = null, bestD = 1e9;
+  for (const e of enemies) {
+    const dx = e.x - P.x, dy = e.y - P.y;
+    const depth = dX * dx + dY * dy;
+    if (depth < 0.15 || depth > wall || depth > bestD) continue;
+    const side = Math.abs(dX * dy - dY * dx);       // distância lateral até a linha de mira
+    if (side < 0.2) { tgt = e; bestD = depth; }
+  }
+  if (tgt) {
+    tgt.hp -= 34; tgt.hit = 0.09;
+    if (tgt.hp <= 0) {
+      enemies.splice(enemies.indexOf(tgt), 1);
+      kills++;
+      sfx(0.25, 0.5);
+    }
+  }
+}
+
+function die() {
+  state = 'dead'; firing = false;
+  if (kills > best) { best = kills; try { localStorage.setItem('tirosRapidosRecorde', String(best)); } catch (e) {} }
+  try { if (document.exitPointerLock) document.exitPointerLock(); } catch (e) {}
+  elTitulo.innerHTML = 'VOCÊ FOI <span>ELIMINADO</span>';
+  elSub.textContent = kills + (kills === 1 ? ' abate' : ' abates') + ' até a rodada ' + round + '.';
+  btn.textContent = 'JOGAR DE NOVO';
+  showBest();
+  menu.hidden = false;
+}
+
+function update(dt) {
+  // jogador
+  P.a += ((keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0)) * 2.6 * dt;
+  const f = ((keys.KeyW || keys.ArrowUp) ? 1 : 0) - ((keys.KeyS || keys.ArrowDown) ? 1 : 0);
+  const s = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+  if (f || s) {
+    const sp = 3.4 * dt / Math.hypot(f, s), c = Math.cos(P.a), sn = Math.sin(P.a);
+    tryMove(P, (c * f - sn * s) * sp, (sn * f + c * s) * sp, 0.2);
+    P.walk += dt * 9;
+  }
+  P.cool -= dt; P.flash -= dt; P.hurt -= dt; banner -= dt;
+  P.kick = Math.max(0, P.kick - dt * 7);
+  if (P.reload > 0) {
+    P.reload -= dt;
+    if (P.reload <= 0) { P.reload = 0; P.ammo = 30; }
+  } else if ((keys.KeyR && P.ammo < 30) || P.ammo === 0) {
+    P.reload = 1.3; sfx(0.15, 0.35);
+  } else if ((firing || keys.Space) && P.cool <= 0) {
+    shoot();
+  }
+
+  // bots
+  flowT -= dt;
+  if (flowT <= 0) { buildFlow(); flowT = 0.25; }
+  const sp = (1.5 + round * 0.12) * dt;
+  for (const e of enemies) {
+    e.hit -= dt; e.fire -= dt; e.cool -= dt;
+    const dx = P.x - e.x, dy = P.y - e.y, d = Math.hypot(dx, dy) || 0.001;
+    const see = d < 11 && los(e.x, e.y, P.x, P.y);
+    if (see && d < 4) {
+      e.st -= dt;
+      if (e.st <= 0) { e.strafe = -e.strafe; e.st = 0.6 + Math.random() * 1.2; }
+      tryMove(e, -dy / d * sp * 0.6 * e.strafe, dx / d * sp * 0.6 * e.strafe, 0.25);
+    } else {
+      const cx = e.x | 0, cy = e.y | 0;
+      let bv = flow[cy * MS + cx], tx = cx, ty = cy;
+      if (bv < 0) bv = 1e9;
+      for (const [ox, oy] of DIRS) {
+        const nx = cx + ox, ny = cy + oy;
+        if (nx < 0 || ny < 0 || nx >= MS || ny >= MS) continue;
+        const v = flow[ny * MS + nx];
+        if (v >= 0 && v < bv) { bv = v; tx = nx; ty = ny; }
+      }
+      const mx = tx + 0.5 - e.x, my = ty + 0.5 - e.y, m = Math.hypot(mx, my);
+      if (m > 0.02) tryMove(e, mx / m * sp, my / m * sp, 0.25);
+    }
+    if (see && e.cool <= 0) {
+      e.cool = 0.7 + Math.random() * 0.9; e.fire = 0.08;
+      sfx(clamp(0.3 - d * 0.02, 0.06, 0.3), 0.9);
+      if (Math.random() < clamp(0.7 - d * 0.06, 0.12, 0.65)) {
+        P.hp -= (5 + Math.random() * 7) | 0; P.hurt = 0.25;
+        if (P.hp <= 0) { P.hp = 0; die(); return; }
+      }
+    }
+  }
+
+  if (!enemies.length) {
+    round++;
+    P.hp = Math.min(100, P.hp + 30);
+    spawnRound();
+  }
+}
+
+// ---------- desenho ----------
+const ceil = g.createLinearGradient(0, 0, 0, H / 2);
+ceil.addColorStop(0, '#2b3440'); ceil.addColorStop(1, '#151a20');
+const floor = g.createLinearGradient(0, H / 2, 0, H);
+floor.addColorStop(0, '#1b1d1f'); floor.addColorStop(1, '#5a5650');
+
+function render() {
+  g.fillStyle = ceil; g.fillRect(0, 0, W, H / 2);
+  g.fillStyle = floor; g.fillRect(0, H / 2, W, H / 2);
+
+  const dX = Math.cos(P.a), dY = Math.sin(P.a), pX = -dY * FOV, pY = dX * FOV;
+
+  // paredes
+  for (let i = 0; i < NR; i++) {
+    const cam = 2 * (i + 0.5) / NR - 1;
+    cast(dX + pX * cam, dY + pY * cam);
+    zbuf[i] = hD;
+    const h = SCALE / hD, y = (H - h) / 2;
+    let b = (hS ? 0.72 : 1) * clamp(1.15 - hD * 0.075, 0.22, 1);
+    if (hU < 0.025 || hU > 0.975) b *= 0.7;
+    const x = i * COL;
+    if (hT === 2) {
+      if (Math.abs(hU - 0.5) < 0.02) b *= 0.75;
+      g.fillStyle = `rgb(${172 * b | 0},${112 * b | 0},${52 * b | 0})`;
+      g.fillRect(x, y, COL, h);
+      g.fillStyle = `rgb(${118 * b | 0},${74 * b | 0},${34 * b | 0})`;
+      g.fillRect(x, y, COL, h * 0.07);
+      g.fillRect(x, y + h * 0.93, COL, h * 0.07);
+    } else {
+      g.fillStyle = `rgb(${128 * b | 0},${142 * b | 0},${156 * b | 0})`;
+      g.fillRect(x, y, COL, h * 0.64);
+      g.fillStyle = `rgb(${232 * b | 0},${140 * b | 0},${48 * b | 0})`;
+      g.fillRect(x, y + h * 0.64, COL, h * 0.03);
+      g.fillStyle = `rgb(${74 * b | 0},${86 * b | 0},${100 * b | 0})`;
+      g.fillRect(x, y + h * 0.67, COL, h * 0.33);
+    }
+  }
+
+  // bots (do mais distante ao mais próximo)
+  for (const e of enemies) e.depth = dX * (e.x - P.x) + dY * (e.y - P.y);
+  enemies.sort((a, b) => b.depth - a.depth);
+  for (const e of enemies) {
+    const depth = e.depth;
+    if (depth < 0.15) continue;
+    const tx = (dX * (e.y - P.y) - dY * (e.x - P.x)) / FOV;
+    const sx = W / 2 * (1 + tx / depth);
+    const size = SCALE / depth, hgt = size * 0.8, wid = size * 0.36;
+    const top = H / 2 + size / 2 - hgt, x0 = sx - wid / 2;
+    const i0 = Math.max(0, Math.floor(x0 / COL)), i1 = Math.min(NR - 1, Math.floor((x0 + wid) / COL));
+    const b = clamp(1.15 - depth * 0.075, 0.3, 1);
+    const white = e.hit > 0;
+    const col = (r, gg, bb) => white ? '#fff' : `rgb(${r * b | 0},${gg * b | 0},${bb * b | 0})`;
+    const cHelm = col(46, 52, 58), cSkin = col(214, 168, 130), cBody = col(92, 82, 58), cArm = col(70, 62, 44), cLeg = col(40, 44, 52);
+    for (let i = i0; i <= i1; i++) {
+      if (zbuf[i] < depth) continue;
+      const u = ((i + 0.5) * COL - x0) / wid;
+      if (u < 0 || u > 1) continue;
+      const x = i * COL;
+      if (u > 0.34 && u < 0.66) {
+        g.fillStyle = cHelm; g.fillRect(x, top, COL, hgt * 0.08);
+        g.fillStyle = cSkin; g.fillRect(x, top + hgt * 0.08, COL, hgt * 0.12);
+      }
+      if (u > 0.1 && u < 0.9) {
+        g.fillStyle = (u < 0.24 || u > 0.76) ? cArm : cBody;
+        g.fillRect(x, top + hgt * 0.2, COL, hgt * ((u < 0.24 || u > 0.76) ? 0.3 : 0.4));
+      }
+      if ((u > 0.24 && u < 0.47) || (u > 0.53 && u < 0.76)) {
+        g.fillStyle = cLeg; g.fillRect(x, top + hgt * 0.6, COL, hgt * 0.4);
+      }
+      if (e.fire > 0 && u > 0.4 && u < 0.6) {
+        g.fillStyle = '#ffe07a'; g.fillRect(x, top + hgt * 0.27, COL, hgt * 0.1);
+      }
+    }
+  }
+
+  // arma
+  const bob = Math.sin(P.walk) * 3, k = P.kick;
+  g.save();
+  g.translate(W * 0.63 + bob, H + k * 9 + Math.abs(bob) * 0.6 + (P.reload > 0 ? Math.sin(Math.PI * (1 - P.reload / 1.3)) * 70 : 0));
+  if (P.flash > 0) {
+    g.fillStyle = 'rgba(255,190,70,.9)'; g.beginPath(); g.arc(-57, -134, 20, 0, 6.3); g.fill();
+    g.fillStyle = '#fff6d0'; g.beginPath(); g.arc(-57, -134, 9, 0, 6.3); g.fill();
+  }
+  g.fillStyle = '#14181c';
+  g.beginPath(); g.moveTo(-50, -98); g.lineTo(-62, -127); g.lineTo(-51, -131); g.lineTo(-33, -104); g.fill();
+  g.fillStyle = '#252b31';
+  g.beginPath(); g.moveTo(-12, 0); g.lineTo(-54, -96); g.lineTo(-29, -106); g.lineTo(62, 0); g.fill();
+  g.fillStyle = '#39424b';
+  g.beginPath(); g.moveTo(-46, -92); g.lineTo(-38, -96); g.lineTo(30, 0); g.lineTo(14, 0); g.fill();
+  g.fillStyle = '#5a4a2c';
+  g.beginPath(); g.moveTo(16, 0); g.lineTo(0, -36); g.lineTo(26, -50); g.lineTo(78, 0); g.fill();
+  g.restore();
+
+  // mira
+  const gap = 4 + k * 5;
+  g.fillStyle = '#ffd08a';
+  g.fillRect(W / 2 - gap - 6, H / 2 - 1, 6, 2); g.fillRect(W / 2 + gap, H / 2 - 1, 6, 2);
+  g.fillRect(W / 2 - 1, H / 2 - gap - 6, 2, 6); g.fillRect(W / 2 - 1, H / 2 + gap, 2, 6);
+
+  // radar
+  const ms = 5, ox = 8, oy = 8;
+  g.fillStyle = 'rgba(10,14,18,.6)'; g.fillRect(ox, oy, MS * ms, MS * ms);
+  for (let y = 0; y < MS; y++) for (let x = 0; x < MS; x++) {
+    const t = MAP[y][x];
+    if (t) { g.fillStyle = t === 2 ? 'rgba(190,130,60,.75)' : 'rgba(150,165,180,.7)'; g.fillRect(ox + x * ms, oy + y * ms, ms, ms); }
+  }
+  g.fillStyle = '#e5484d';
+  for (const e of enemies) g.fillRect(ox + e.x * ms - 1.5, oy + e.y * ms - 1.5, 3, 3);
+  g.strokeStyle = '#ffd08a'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(ox + P.x * ms, oy + P.y * ms); g.lineTo(ox + (P.x + dX * 1.6) * ms, oy + (P.y + dY * 1.6) * ms); g.stroke();
+  g.fillStyle = '#fff'; g.fillRect(ox + P.x * ms - 1.5, oy + P.y * ms - 1.5, 3, 3);
+
+  // dano e avisos
+  if (P.hurt > 0) { g.fillStyle = `rgba(210,35,40,${Math.min(0.45, P.hurt * 1.7)})`; g.fillRect(0, 0, W, H); }
+  if (banner > 0 && state === 'play') {
+    g.globalAlpha = Math.min(1, banner);
+    g.font = '700 30px "Chakra Petch", Arial, sans-serif'; g.textAlign = 'center';
+    g.fillStyle = 'rgba(0,0,0,.6)'; g.fillText(bannerText, W / 2 + 2, 82);
+    g.fillStyle = '#ff9d2e'; g.fillText(bannerText, W / 2, 80);
+    g.font = '500 12px "Chakra Petch", Arial, sans-serif';
+    g.fillStyle = '#e6ebf0'; g.fillText(enemies.length + ' BOTS NO GALPÃO', W / 2, 98);
+    g.globalAlpha = 1;
+  }
+
+  // HUD
+  elVida.textContent = P.hp; elVida.classList.toggle('baixa', P.hp <= 30);
+  elMun.textContent = P.reload > 0 ? 'RECARREGANDO' : P.ammo; elMun.classList.toggle('rec', P.reload > 0);
+  elRod.textContent = round; elAba.textContent = kills;
+}
+
+// ---------- entrada ----------
+function tryLock() {
+  try {
+    const p = cv.requestPointerLock && cv.requestPointerLock();
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
+document.addEventListener('pointerlockchange', () => {
+  const now = document.pointerLockElement === cv;
+  if (locked && !now && state === 'play') pause();
+  locked = now;
+});
+function pause() {
+  state = 'paused'; firing = false;
+  elTitulo.innerHTML = 'JOGO <span>PAUSADO</span>';
+  elSub.textContent = 'Rodada ' + round + ', ' + kills + (kills === 1 ? ' abate.' : ' abates.');
+  btn.textContent = 'CONTINUAR';
+  menu.hidden = false;
+}
+btn.addEventListener('click', () => {
+  initAudio();
+  if (state !== 'paused') newGame();
+  state = 'play'; menu.hidden = true;
+  for (const k in keys) keys[k] = false;
+  tryLock();
+  btn.blur();
+});
+cv.addEventListener('mousedown', e => {
+  if (state !== 'play' || e.button !== 0) return;
+  if (!locked) tryLock();
+  firing = true;
+});
+window.addEventListener('mouseup', () => { firing = false; });
+window.addEventListener('blur', () => { firing = false; for (const k in keys) keys[k] = false; });
+document.addEventListener('mousemove', e => {
+  if (locked && state === 'play') P.a += (e.movementX || 0) * 0.0024;
+});
+cv.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('keydown', e => {
+  if (state === 'play' && (e.code === 'Space' || String(e.code).startsWith('Arrow'))) e.preventDefault();
+  if (e.code === 'KeyM' && !e.repeat) muted = !muted;
+  if (e.code === 'Escape' && state === 'play' && !locked) pause();
+  keys[e.code] = true;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- laço ----------
+let last = 0;
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000 || 0);
+  last = t;
+  if (state === 'play') update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+newGame();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
